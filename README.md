@@ -23,8 +23,8 @@ exactly as they do over the wire, without a TCP round trip.
 ## Installation
 
 ePHPm packages are distributed via their GitHub repositories, not Packagist.
-Add this repo as a Composer `vcs` repository; `ephpm/db` is tagged `v0.1.0`,
-so `^0.1` resolves:
+Add this repo as a Composer `vcs` repository; `ephpm/db` is tagged
+(currently `v0.1.1`), so `^0.1` resolves:
 
 ```json
 {
@@ -47,9 +47,11 @@ Constructing two `Connection` instances gives you the same underlying
 session.
 
 The consequence that matters: **transaction state belongs to the worker
-thread, not to the request.** A transaction left open at the end of a request
-stays open on that thread until its next `ephpm_db_*` call (which may belong
-to an unrelated request). Always commit or roll back before returning —
+thread, not to the request.** The server protects the next request from your
+mistakes: if a script leaves a transaction open at the end of a request, the
+server **rolls it back at request end** (logging a warning server-side) —
+abandoned writes are lost, never silently joined to an unrelated later
+request. Don't lean on that safety net: commit or roll back explicitly,
 preferably via `transaction()`, which guarantees it.
 
 ## Usage
@@ -105,8 +107,9 @@ $db->transaction(function (Connection $db) {
 `transaction()` issues `BEGIN`, runs the callback, and issues `COMMIT`; if
 the callback (or the commit) throws **anything**, it rolls back and rethrows
 the original throwable. Manual `begin()` / `commit()` / `rollBack()` are also
-available — they flow through as plain SQL on the thread's session, so if you
-use them, you own the cleanup (see above).
+available — they flow through as plain SQL on the thread's session. A
+transaction you leave open is rolled back by the server at request end (with
+a server-side warning), so finish it explicitly if you want the writes.
 
 ### Parameters
 

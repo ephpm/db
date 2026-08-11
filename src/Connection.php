@@ -22,9 +22,10 @@ use Ephpm\Db\Exception\DbException;
  *
  * - Transaction state (`BEGIN`/`COMMIT`/`ROLLBACK`, which flow through as
  *   plain SQL) belongs to the worker thread, not to this object or to the
- *   HTTP request. A transaction left open at the end of a request stays
- *   open on that thread until its next `ephpm_db_*` call — always commit
- *   or roll back before returning; prefer {@see transaction()} which
+ *   HTTP request. A transaction left open at the end of a request is
+ *   rolled back by the server at request end (with a server-side warning
+ *   log) — abandoned writes are lost, never leaked into a later request.
+ *   Commit or roll back explicitly; prefer {@see transaction()} which
  *   guarantees it.
  * - The SQL dialect is MySQL: `SHOW`/`DESCRIBE` are emulated,
  *   `SET NAMES` is a no-op, and `?` placeholders bind null, bool, int,
@@ -140,10 +141,11 @@ final class Connection
      * (or the COMMIT) throws anything, the transaction is rolled back and
      * the original throwable is rethrown. Returns whatever `$fn` returned.
      *
-     * Because the underlying session is per worker thread — not per
-     * request — this helper is the safest way to use transactions: it
-     * guarantees the thread's session never leaks an open transaction
-     * into a later request.
+     * This helper is the safest way to use transactions: the outcome is
+     * always explicit. (A transaction left open at request end is rolled
+     * back by the server as a safety net — with a server-side warning and
+     * the writes lost — so relying on manual begin()/commit() and
+     * forgetting the commit means silent data loss, not a leak.)
      *
      * @template T
      *

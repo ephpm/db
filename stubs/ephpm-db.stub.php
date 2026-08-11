@@ -21,8 +21,10 @@
  *   as plain SQL all behave exactly as they do over the wire, without a
  *   TCP round trip.
  * - The session lives for the **worker thread**, not the request. A
- *   transaction left open at request end stays open on that thread until
- *   its next ephpm_db_* call — always COMMIT/ROLLBACK before returning.
+ *   transaction left open at request end is rolled back by the server
+ *   (`db_bridge::on_request_end()`, with a server-side warning log) —
+ *   abandoned writes are lost, never joined to a later request. COMMIT or
+ *   ROLLBACK explicitly.
  * - `?` placeholders bind null, bool, int, float, and string parameters
  *   only (bool binds as 1/0; a non-UTF-8 string binds as a BLOB). Any
  *   other parameter type throws.
