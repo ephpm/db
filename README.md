@@ -14,9 +14,9 @@ exactly as they do over the wire, without a TCP round trip.
 ## Requirements
 
 - PHP **8.2+**
-- The application must be served by an **ePHPm** binary built from current
-  `main` (newer than the v0.6.2 release — the `ephpm_db_*` natives are not in
-  any tagged release yet), with an embedded database configured
+- The application must be served by an **ePHPm** binary, **v0.6.3 or newer**
+  (current release: v0.8.6 — the `ephpm_db_*` natives first shipped in
+  v0.6.3), with an embedded database configured
   (`[db.sqlite]`). Outside that environment every entry point throws
   `Ephpm\Db\Exception\BridgeUnavailableException` with an actionable message.
 
