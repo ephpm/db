@@ -19,9 +19,16 @@ final class Result implements \IteratorAggregate, \Countable
 {
     /**
      * @param list<array<string, int|float|string|null>> $rows
+     * @param list<array{name: string, type: ?string}>   $columns column
+     *        metadata for this result set, in select order. Carries the
+     *        column names even for a zero-row result set (ePHPm issue #262),
+     *        which the rows alone cannot. Empty when unknown (a plain
+     *        {@see Connection::query()} does not fetch it).
      */
-    public function __construct(private readonly array $rows)
-    {
+    public function __construct(
+        private readonly array $rows,
+        private readonly array $columns = [],
+    ) {
     }
 
     /**
@@ -32,6 +39,31 @@ final class Result implements \IteratorAggregate, \Countable
     public function rows(): array
     {
         return $this->rows;
+    }
+
+    /**
+     * Column metadata for this result set as a list of
+     * `['name' => string, 'type' => ?string]`, in select order.
+     *
+     * Populated by {@see Connection::run()} (and available even when the
+     * result matched zero rows, ePHPm issue #262). Empty for a Result built
+     * by {@see Connection::query()}, which does not fetch column metadata.
+     *
+     * @return list<array{name: string, type: ?string}>
+     */
+    public function columns(): array
+    {
+        return $this->columns;
+    }
+
+    /**
+     * The column names in select order.
+     *
+     * @return list<string>
+     */
+    public function columnNames(): array
+    {
+        return \array_map(static fn (array $c): string => $c['name'], $this->columns);
     }
 
     /**

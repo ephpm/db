@@ -70,4 +70,58 @@ final class TransactionTest extends TestCase
 
         self::assertSame(1, $this->db->scalar('SELECT COUNT(*) FROM t'));
     }
+
+    public function testInTransactionTracksSessionState(): void
+    {
+        self::assertFalse($this->db->inTransaction());
+        $this->db->begin();
+        self::assertTrue($this->db->inTransaction());
+        $this->db->commit();
+        self::assertFalse($this->db->inTransaction());
+    }
+
+    /**
+     * When the callback commits (or otherwise closes the transaction)
+     * itself and then throws, transaction() must NOT fire a blind ROLLBACK
+     * on a session that is no longer in a transaction (issue #260). The old
+     * code rolled back unconditionally and swallowed the resulting
+     * "no transaction is active" error.
+     */
+    public function testTransactionDoesNotRollBackWhenNoTransactionIsOpen(): void
+    {
+        $boom = new \RuntimeException('after commit');
+
+        try {
+            $this->db->transaction(function (Connection $db) use ($boom): void {
+                $db->execute('INSERT INTO t (name) VALUES (?)', ['committed']);
+                $db->commit();
+
+                throw $boom;
+            });
+            self::fail('transaction() must rethrow');
+        } catch (\RuntimeException $e) {
+            self::assertSame($boom, $e);
+        }
+
+        // The inner COMMIT stuck because no blind ROLLBACK undid it...
+        self::assertSame(1, $this->db->scalar('SELECT COUNT(*) FROM t'));
+        // ...and transaction() issued zero ROLLBACK statements.
+        self::assertSame(0, \EphpmDbFake::$rollbackAttempts);
+    }
+
+    public function testTransactionStillRollsBackAnOpenTransaction(): void
+    {
+        try {
+            $this->db->transaction(function (Connection $db): void {
+                $db->execute('INSERT INTO t (name) VALUES (?)', ['a']);
+
+                throw new \DomainException('boom');
+            });
+            self::fail('transaction() must rethrow');
+        } catch (\DomainException) {
+        }
+
+        self::assertSame(0, $this->db->scalar('SELECT COUNT(*) FROM t'));
+        self::assertSame(1, \EphpmDbFake::$rollbackAttempts);
+    }
 }
