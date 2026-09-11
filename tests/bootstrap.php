@@ -52,6 +52,28 @@ if (!function_exists('ephpm_db_query')) {
 
         private static ?\SQLite3 $db = null;
 
+        /** This thread's explicit-transaction flag (issue #260). */
+        private static bool $inTransaction = false;
+
+        /**
+         * Column metadata of the last statement (issue #262), kept after
+         * the rows are released so a zero-row SELECT still reports its
+         * column names.
+         *
+         * @var list<array{name: string, type: ?string}>
+         */
+        private static array $lastColumns = [];
+
+        /** Did the last statement produce a result set? (issue #263) */
+        private static bool $lastHadRowset = false;
+
+        /**
+         * How many ROLLBACK statements reached the bridge since reset().
+         * Lets a test assert that Connection::transaction() no longer fires
+         * ROLLBACK blind after the session already left its transaction.
+         */
+        public static int $rollbackAttempts = 0;
+
         /** Drop all state: fresh in-memory database, bridge available. */
         public static function reset(): void
         {
@@ -60,6 +82,26 @@ if (!function_exists('ephpm_db_query')) {
             }
             self::$db = null;
             self::$unavailable = false;
+            self::$inTransaction = false;
+            self::$lastColumns = [];
+            self::$lastHadRowset = false;
+            self::$rollbackAttempts = 0;
+        }
+
+        public static function inTransaction(): bool
+        {
+            return self::$inTransaction;
+        }
+
+        /** @return list<array{name: string, type: ?string}> */
+        public static function lastColumns(): array
+        {
+            return self::$lastColumns;
+        }
+
+        public static function lastHadRowset(): bool
+        {
+            return self::$lastHadRowset;
         }
 
         public static function db(): \SQLite3
@@ -83,6 +125,10 @@ if (!function_exists('ephpm_db_query')) {
          */
         public static function run(string $sql, array $params): \SQLite3Result
         {
+            if (str_starts_with(strtoupper(ltrim($sql)), 'ROLLBACK')) {
+                self::$rollbackAttempts++;
+            }
+
             if (self::$unavailable) {
                 throw new \Exception(
                     'ephpm_db: no embedded database is active (requires [db.sqlite])'
@@ -121,9 +167,38 @@ if (!function_exists('ephpm_db_query')) {
                     throw new \Exception(self::db()->lastErrorMsg());
                 }
 
+                self::recordMetadata($sql, $result);
+
                 return $result;
             } catch (\Exception $e) {
                 throw self::mapError($e);
+            }
+        }
+
+        /**
+         * Capture the last statement's column metadata / rowset flag and
+         * advance the transaction flag — the state the real bridge keeps in
+         * its per-thread session (issues #260, #262, #263).
+         */
+        private static function recordMetadata(string $sql, \SQLite3Result $result): void
+        {
+            $ncols = $result->numColumns();
+            self::$lastHadRowset = $ncols > 0;
+
+            $columns = [];
+            for ($c = 0; $c < $ncols; $c++) {
+                // SQLite exposes no declared type through the sqlite3
+                // extension, and the real bridge reports null for an
+                // expression column too — so null is faithful here.
+                $columns[] = ['name' => $result->columnName($c), 'type' => null];
+            }
+            self::$lastColumns = $columns;
+
+            $keyword = strtoupper(substr(ltrim($sql), 0, 5));
+            if (str_starts_with($keyword, 'BEGIN') || str_starts_with($keyword, 'START')) {
+                self::$inTransaction = true;
+            } elseif (str_starts_with($keyword, 'COMMI') || str_starts_with($keyword, 'ROLLB')) {
+                self::$inTransaction = false;
             }
         }
 
@@ -188,5 +263,53 @@ if (!function_exists('ephpm_db_query')) {
             'affected_rows' => EphpmDbFake::db()->changes(),
             'last_insert_id' => EphpmDbFake::db()->lastInsertRowID(),
         ];
+    }
+
+    /**
+     * The unified entry point (issue #263): run once, report both the rows
+     * and the OK metadata, plus the authoritative has_rowset flag read from
+     * the executed statement.
+     */
+    function ephpm_db_run(string $sql, array $params = []): array
+    {
+        $result = EphpmDbFake::run($sql, $params);
+        $hasRowset = EphpmDbFake::lastHadRowset();
+
+        $rows = [];
+        if ($hasRowset) {
+            while (($row = $result->fetchArray(SQLITE3_ASSOC)) !== false) {
+                $rows[] = $row;
+            }
+        }
+        $result->finalize();
+
+        return [
+            'has_rowset' => $hasRowset,
+            'rows' => $rows,
+            'columns' => EphpmDbFake::lastColumns(),
+            'affected_rows' => $hasRowset ? 0 : EphpmDbFake::db()->changes(),
+            'last_insert_id' => $hasRowset ? 0 : EphpmDbFake::db()->lastInsertRowID(),
+        ];
+    }
+
+    /**
+     * Column metadata of the last statement (issue #262) — valid even after
+     * a zero-row result set, whose rows cannot carry the column names.
+     */
+    function ephpm_db_columns(): array
+    {
+        return EphpmDbFake::lastColumns();
+    }
+
+    /** This thread's explicit-transaction flag (issue #260). */
+    function ephpm_db_in_transaction(): bool
+    {
+        return EphpmDbFake::inTransaction();
+    }
+
+    /** Whether a statement issued now would reach a database (issue #259). */
+    function ephpm_db_available(): bool
+    {
+        return !EphpmDbFake::$unavailable;
     }
 }
